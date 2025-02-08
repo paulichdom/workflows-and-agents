@@ -26,5 +26,13 @@
   "workspaces": [
     "apps/*",
     "packages/*"
-  ]
+  ],
+  "dependencies": {
+    "@langchain/anthropic": "^0.3.13",
+    "@langchain/core": "^0.3.39",
+    "@langchain/langgraph": "^0.2.45",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/mapped-types": "*",
+    "zod": "^3.24.1"
+  }
 }
