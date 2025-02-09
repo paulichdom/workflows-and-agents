@@ -11,4 +11,9 @@ export class WorkflowController {
     return this.workflowService.augmentedLLM()
   }
 
+  @Get('prompt-chain')
+  promptChain() {
+    return this.workflowService.promptChain()
+  }
+
 }
