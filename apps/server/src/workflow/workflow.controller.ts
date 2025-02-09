@@ -16,4 +16,8 @@ export class WorkflowController {
     return this.workflowService.promptChain()
   }
 
+  @Get('parallelization')
+  parallelization() {
+    return this.workflowService.parallelization()
+  }
 }

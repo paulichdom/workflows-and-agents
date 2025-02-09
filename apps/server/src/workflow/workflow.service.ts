@@ -61,6 +61,15 @@ export class WorkflowService {
     return { message };
   }
 
+  /**
+   * Prompt chaining
+   * 
+   * Prompt chaining decomposes a task into a sequence of steps, 
+   * where each LLM call processes the output of the previous one. 
+   * You can add programmatic checks on any intermediate steps to 
+   * ensure that the process is still on track.
+   * @returns 
+   */
   async promptChain() {
     const StateAnnotation = Annotation.Root({
       topic: Annotation<string>,
@@ -124,5 +133,73 @@ export class WorkflowService {
     const state = await chain.invoke({ topic: 'cats' });
 
     return state;
+  }
+
+  /**
+   * Parallelization
+   * 
+   * LLMs can sometimes work simultaneously on a task and have their outputs aggregated programmatically.
+   * This workflow, parallelization, manifests in two key variations: 
+   *  - Sectioning: Breaking a task into independent subtasks run in parallel. 
+   *  - Voting: Running the same task multiple times to get diverse outputs.
+   * @returns 
+   */
+  async parallelization() {
+    // Graph state
+    const StateAnnotation = Annotation.Root({
+      topic: Annotation<string>,
+      joke: Annotation<string>,
+      story: Annotation<string>,
+      poem: Annotation<string>,
+      combinedOutput: Annotation<string>,
+    });
+
+    // Nodes
+    // First LLM call to generate initial joke
+    const callLlm1 = async (state: typeof StateAnnotation.State) => {
+      const msg = await this.llm.invoke(`Write a joke about ${state.topic}`);
+      return { joke: msg.content };
+    };
+
+    // Second LLM call to generate story
+    const callLlm2 = async (state: typeof StateAnnotation.State) => {
+      const msg = await this.llm.invoke(`Write a story about ${state.topic}`);
+      return { story: msg.content };
+    };
+
+    // Third LLM call to generate poem
+    const callLlm3 = async (state: typeof StateAnnotation.State) => {
+      const msg = await this.llm.invoke(`Write a poem about ${state.topic}`);
+      return { poem: msg.content };
+    };
+
+    const aggregator = async (state: typeof StateAnnotation.State) => {
+      const combined =
+        `Here's a story, joke, and poem about ${state.topic}!\n\n` +
+        `STORY:\n${state.story}\n\n` +
+        `JOKE:\n${state.joke}\n\n` +
+        `POEM:\n${state.poem}`;
+
+      return { combinedOutput: combined };
+    };
+
+    // Build wokflow
+    const parallelWorkflow = new StateGraph(StateAnnotation)
+      .addNode('callLlm1', callLlm1)
+      .addNode('callLlm2', callLlm2)
+      .addNode('callLlm3', callLlm3)
+      .addNode('aggregator', aggregator)
+      .addEdge('__start__', 'callLlm1')
+      .addEdge('__start__', 'callLlm2')
+      .addEdge('__start__', 'callLlm3')
+      .addEdge('callLlm1', 'aggregator')
+      .addEdge('callLlm2', 'aggregator')
+      .addEdge('callLlm3', 'aggregator')
+      .addEdge('aggregator', '__end__')
+      .compile();
+
+    const result = await parallelWorkflow.invoke({ topic: 'cats' });
+
+    return result;
   }
 }
