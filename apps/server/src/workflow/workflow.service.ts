@@ -63,12 +63,12 @@ export class WorkflowService {
 
   /**
    * Prompt chaining
-   * 
-   * Prompt chaining decomposes a task into a sequence of steps, 
-   * where each LLM call processes the output of the previous one. 
-   * You can add programmatic checks on any intermediate steps to 
+   *
+   * Prompt chaining decomposes a task into a sequence of steps,
+   * where each LLM call processes the output of the previous one.
+   * You can add programmatic checks on any intermediate steps to
    * ensure that the process is still on track.
-   * @returns 
+   * @returns
    */
   async promptChain() {
     const StateAnnotation = Annotation.Root({
@@ -137,12 +137,12 @@ export class WorkflowService {
 
   /**
    * Parallelization
-   * 
+   *
    * LLMs can sometimes work simultaneously on a task and have their outputs aggregated programmatically.
-   * This workflow, parallelization, manifests in two key variations: 
-   *  - Sectioning: Breaking a task into independent subtasks run in parallel. 
+   * This workflow, parallelization, manifests in two key variations:
+   *  - Sectioning: Breaking a task into independent subtasks run in parallel.
    *  - Voting: Running the same task multiple times to get diverse outputs.
-   * @returns 
+   * @returns
    */
   async parallelization() {
     // Graph state
@@ -201,5 +201,126 @@ export class WorkflowService {
     const result = await parallelWorkflow.invoke({ topic: 'cats' });
 
     return result;
+  }
+
+  /**
+   * Routing classifies an input and directs it to a specialized followup task.
+   * This workflow allows for separation of concerns, and building more specialized prompts.
+   * Without this workflow, optimizing for one kind of input can hurt performance on other inputs.
+   */
+  async routing(input: string) {
+    const routeSchema = z.object({
+      step: z
+        .enum(['poem', 'story', 'joke'])
+        .describe('The next step in the routing process'),
+    });
+
+    // Augment the LLM with schema for strucured output
+    const router = this.llm.withStructuredOutput(routeSchema);
+
+    // Graph state
+    const StateAnnotation = Annotation.Root({
+      input: Annotation<string>,
+      decision: Annotation<string>,
+      output: Annotation<string>,
+    });
+
+    // Nodes
+    // Write a story
+    const llmCall1 = async (state: typeof StateAnnotation.State) => {
+      const result = await this.llm.invoke([
+        {
+          role: 'system',
+          content: 'You are an expert storyteller',
+        },
+        {
+          role: 'user',
+          content: state.input,
+        },
+      ]);
+
+      return { output: result.content };
+    };
+
+    // Write a joke
+    const llmCall2 = async (state: typeof StateAnnotation.State) => {
+      const result = await this.llm.invoke([
+        {
+          role: 'system',
+          content: 'You are an expert comedian.',
+        },
+        {
+          role: 'user',
+          content: state.input,
+        },
+      ]);
+      return { output: result.content };
+    };
+
+    // Write a poem
+    const llmCall3 = async (state: typeof StateAnnotation.State) => {
+      const result = await this.llm.invoke([
+        {
+          role: 'system',
+          content: 'You are an expert poet.',
+        },
+        {
+          role: 'user',
+          content: state.input,
+        },
+      ]);
+      return { output: result.content };
+    };
+
+    const llmCallRouter = async (state: typeof StateAnnotation.State) => {
+      // Route the input to the appropriate node
+      const decision = await router.invoke([
+        {
+          role: 'system',
+          content:
+            "Route the input to story, joke, or poem based on the user's request.",
+        },
+        {
+          role: 'user',
+          content: state.input,
+        },
+      ]);
+
+      return { decision: decision.step };
+    };
+
+    const routeDecision = async (state: typeof StateAnnotation.State) => {
+      // Return the node name you want to visit next
+      if (state.decision === 'story') {
+        return 'llmCall1';
+      } else if (state.decision === 'joke') {
+        return 'llmCall2';
+      } else if (state.decision === 'poem') {
+        return 'llmCall3';
+      }
+    };
+
+    // Build workflow
+    const routerWorkflow = new StateGraph(StateAnnotation)
+      .addNode('llmCall1', llmCall1)
+      .addNode('llmCall2', llmCall2)
+      .addNode('llmCall3', llmCall3)
+      .addNode('llmCallRouter', llmCallRouter)
+      .addEdge('__start__', 'llmCallRouter')
+      .addConditionalEdges('llmCallRouter', routeDecision, [
+        'llmCall1',
+        'llmCall2',
+        'llmCall3',
+      ])
+      .addEdge('llmCall1', '__end__')
+      .addEdge('llmCall2', '__end__')
+      .addEdge('llmCall3', '__end__')
+      .compile();
+
+    const state = await routerWorkflow.invoke({
+      input,
+    });
+
+    return state;
   }
 }
