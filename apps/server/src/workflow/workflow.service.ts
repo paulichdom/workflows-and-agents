@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { StateGraph, Annotation } from '@langchain/langgraph';
+import { StateGraph, Annotation, Send } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
+import { ASYNC_METHOD_SUFFIX } from '@nestjs/common/module-utils/constants';
 
 @Injectable()
 export class WorkflowService {
@@ -322,5 +323,112 @@ export class WorkflowService {
     });
 
     return state;
+  }
+
+  /**
+   * In the orchestrator-workers workflow, a central LLM dynamically breaks down tasks,
+   * delegates them to worker LLMs, and synthesizes their results.
+   */
+  async orchestratorWorker() {
+    const sectionSchema = z.object({
+      name: z.string().describe('Name for this section of the report.'),
+      description: z
+        .string()
+        .describe(
+          'Brief overview of the main topics and concepts to be covered in this section.',
+        ),
+    });
+
+    const sectionsSchema = z.object({
+      sections: z.array(sectionSchema).describe('Sections of the report.'),
+    });
+
+    // Augment the LLM with schema for strucured output
+    const planner = this.llm.withStructuredOutput(sectionsSchema);
+
+    // Graph state
+    const StateAnnotation = Annotation.Root({
+      topic: Annotation<string>,
+      sections: Annotation<Array<z.infer<typeof sectionSchema>>>,
+      completedSections: Annotation<string[]>({
+        default: () => [],
+        reducer: (a, b) => a.concat(b),
+      }),
+      finalReport: Annotation<string>
+    });
+
+    // Worker state
+    const WorkerStateAnnotation = Annotation.Root({
+      section: Annotation<z.infer<typeof sectionSchema>>,
+      completedSections: Annotation<string[]>({
+        default: () => [],
+        reducer: (a, b) => a.concat(b),
+      }),
+    });
+
+    // Nodes
+    const orchestrator = async (state: typeof StateAnnotation.State) => {
+      // Geneare queries
+      const reportSections = await planner.invoke([
+        { role: 'system', content: 'Generate a plan for the report.' },
+        { role: 'user', content: `Here is the report topic: ${state.topic}` },
+      ]);
+
+      return { sections: reportSections.sections };
+    };
+
+    const llmCall = async (state: typeof WorkerStateAnnotation.State) => {
+      // Generate section
+      const section = await this.llm.invoke([
+        {
+          role: 'system',
+          content:
+            'Write a report section following the provided name and description. Include no preamble for each section. Use markdown formatting.',
+        },
+        {
+          role: 'user',
+          content: `Here is the section name: ${state.section.name} and description: ${state.section.description}`,
+        },
+      ]);
+
+      // Write the updated section to completed sections
+      return { completedSections: [section.content] };
+    };
+
+    const synthesizer = async (state: typeof StateAnnotation.State) => {
+      // List  of completed sections
+      const completedSections = state.completedSections;
+
+      // Format completed section to str to use as context for final sections
+      const completedReportSections = completedSections.join('\n\n---\n\n');
+
+      return { finalReport: completedReportSections };
+    };
+
+    // Conditional edge function to create llm_call workers that each write a section of the report
+    const assignWorkers = (state: typeof StateAnnotation.State) => {
+      // Kick off section writing in parallel via Send() API
+      return state.sections.map((section) => new Send('llmCall', { section }));
+    };
+
+    // Build workflow
+    const orchestratorWorker = new StateGraph(StateAnnotation)
+      .addNode('orchestrator', orchestrator)
+      .addNode('llmCall', llmCall)
+      .addNode('synthesizer', synthesizer)
+      .addEdge('__start__', 'orchestrator')
+      .addConditionalEdges('orchestrator', assignWorkers, ['llmCall'])
+      .addEdge('llmCall', 'synthesizer')
+      .addEdge('synthesizer', '__end__')
+      .compile();
+
+    // Invoke
+    const state = await orchestratorWorker.invoke({
+      topic: 'Create a report on LLM scaling laws',
+    });
+
+    console.log({state})
+
+    return state.finalReport
   }
 }

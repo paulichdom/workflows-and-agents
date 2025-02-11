@@ -25,4 +25,9 @@ export class WorkflowController {
   routing(@Body() body: {input: string}) {
     return this.workflowService.routing(body.input);
   }
+
+  @Get('orchestrator-worker')
+  orchestratorWorker() {
+    return this.workflowService.orchestratorWorker();
+  }
 }
