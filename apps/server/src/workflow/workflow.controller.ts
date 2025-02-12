@@ -30,4 +30,9 @@ export class WorkflowController {
   orchestratorWorker() {
     return this.workflowService.orchestratorWorker();
   }
+
+  @Get('evaluator-optimizer')
+  evaluatorOptimizer() {
+    return this.workflowService.evaluatorOptimizer();
+  }
 }
