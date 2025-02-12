@@ -28,11 +28,14 @@
     "packages/*"
   ],
   "dependencies": {
+    "@ai-sdk/anthropic": "^1.1.6",
+    "@ai-sdk/google": "^1.1.11",
     "@langchain/anthropic": "^0.3.13",
     "@langchain/core": "^0.3.39",
     "@langchain/langgraph": "^0.2.45",
     "@nestjs/config": "^4.0.0",
     "@nestjs/mapped-types": "*",
+    "ai": "^4.1.34",
     "zod": "^3.24.1"
   }
 }
