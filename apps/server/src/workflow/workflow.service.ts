@@ -8,7 +8,7 @@ import {
   MessagesAnnotation,
 } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage, HumanMessage, SystemMessage, BaseMessage } from '@langchain/core/messages';
 
 @Injectable()
 export class WorkflowService {
@@ -524,10 +524,10 @@ export class WorkflowService {
       },
       {
         name: 'multiply',
-        description: 'Multiply two numbers together',
+        description: 'multiplies two numbers together',
         schema: z.object({
-          a: z.number().describe('first number'),
-          b: z.number().describe('second number'),
+          a: z.number().describe('the first number'),
+          b: z.number().describe('the second number'),
         }),
       },
     );
@@ -562,22 +562,41 @@ export class WorkflowService {
 
     // Augment the LLM with tools
     const tools = [add, multiply, divide];
-    const toolsByName = Object.fromEntries(
-      tools.map((tool) => [tool.name, tool]),
-    );
+    const toolsByName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
     const llmWithTools = this.llm.bindTools(tools);
 
     // Nodes
     const llmCall = async (state: typeof MessagesAnnotation.State) => {
-      // LLM decides wether to call a tool or not
-      const result = await llmWithTools.invoke([
-        {
-          role: 'system',
-          content:
-            'You are a helpful assistant tasked with performing arithmetic on a set of inputs.',
-        },
-        ...state.messages,
-      ]);
+      const systemMessage = new SystemMessage(
+        'You are a helpful assistant tasked with performing arithmetic on a set of inputs.'
+      );
+
+      const ensureStringContent = (content: unknown): string => 
+        typeof content === 'string' ? content : JSON.stringify(content);
+
+      const createTypedMessage = (msg: BaseMessage) => {
+        const content = ensureStringContent(msg.content);
+
+        switch (true) {
+          case msg instanceof AIMessage:
+            return new AIMessage({
+              content,
+              tool_calls: (msg as AIMessage).tool_calls,
+            });
+          case msg instanceof ToolMessage:
+            return new ToolMessage({
+              content,
+              tool_call_id: (msg as ToolMessage).tool_call_id,
+            });
+          case msg instanceof HumanMessage:
+            return new HumanMessage({ content });
+          default:
+            return new HumanMessage({ content });
+        }
+      };
+
+      const messages = state.messages.map(createTypedMessage);
+      const result = await llmWithTools.invoke([systemMessage, ...messages]);
 
       return {
         messages: [result],
@@ -585,11 +604,10 @@ export class WorkflowService {
     };
 
     const toolNode = async (state: typeof MessagesAnnotation.State) => {
-      // Performs the tool call
       const results: ToolMessage[] = [];
       const lastMessage = state.messages.at(-1);
 
-      if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
+      if (lastMessage instanceof AIMessage && lastMessage?.tool_calls?.length) {
         for (const toolCall of lastMessage.tool_calls) {
           const tool = toolsByName[toolCall.name];
           const observation = await tool.invoke(toolCall.args);
@@ -605,17 +623,13 @@ export class WorkflowService {
       return { messages: results };
     };
 
-    // Conditional edge function to route the tool to the tool node or end
     const shouldContinue = (state: typeof MessagesAnnotation.State) => {
       const messages = state.messages;
       const lastMessage = messages.at(-1);
 
-      // If the LLM makes a tool call, then perform an action
-      if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
+      if (lastMessage instanceof AIMessage && lastMessage?.tool_calls?.length) {
         return 'Action';
       }
-
-      // Otherwise, we stop (reply to user)
       return '__end__';
     };
 
@@ -623,10 +637,8 @@ export class WorkflowService {
     const agentBuilder = new StateGraph(MessagesAnnotation)
       .addNode('llmCall', llmCall)
       .addNode('tools', toolNode)
-      // Add edges to connect the nodes
       .addEdge('__start__', 'llmCall')
       .addConditionalEdges('llmCall', shouldContinue, {
-        // Name returned by shouldContinue: Name of next node to visit
         Action: 'tools',
         __end__: '__end__',
       })
@@ -635,12 +647,10 @@ export class WorkflowService {
 
     // Invoke
     const messages = [
-      {
-        role: 'user',
-        content: 'Add 3 and 4.',
-      },
+      new HumanMessage({
+        content: 'Add 3 and 4.'
+      })
     ];
-
     const result = await agentBuilder.invoke({ messages });
 
     return result.messages;
