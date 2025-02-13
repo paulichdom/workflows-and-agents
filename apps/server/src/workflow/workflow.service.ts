@@ -1,9 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { StateGraph, Annotation, Send } from '@langchain/langgraph';
+import {
+  StateGraph,
+  Annotation,
+  Send,
+  MessagesAnnotation,
+} from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
-import { ASYNC_METHOD_SUFFIX } from '@nestjs/common/module-utils/constants';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 
 @Injectable()
 export class WorkflowService {
@@ -35,10 +40,8 @@ export class WorkflowService {
       'How does Calcium CT score relate to high cholesterol?',
     );
 
-    console.log({ output });
-
     const multiply = tool(
-      ({ a, b }) => {
+      async ({ a, b }) => {
         return a * b;
       },
       {
@@ -507,5 +510,139 @@ export class WorkflowService {
     console.log(state.joke);
 
     return state;
+  }
+
+  /**
+   * Agents can handle sophisticated tasks, but their implementation is often straightforward.
+   * They are typically just LLMs using tools based on environmental feedback in a loop.
+   */
+  async agent() {
+    // Define tools
+    const multiply = tool(
+      async ({ a, b }) => {
+        return a * b;
+      },
+      {
+        name: 'multiply',
+        description: 'Multiply two numbers together',
+        schema: z.object({
+          a: z.number().describe('first number'),
+          b: z.number().describe('second number'),
+        }),
+      },
+    );
+
+    const add = tool(
+      async ({ a, b }) => {
+        return a + b;
+      },
+      {
+        name: 'add',
+        description: 'Add two numbers together',
+        schema: z.object({
+          a: z.number().describe('first number'),
+          b: z.number().describe('second number'),
+        }),
+      },
+    );
+
+    const divide = tool(
+      async ({ a, b }) => {
+        return a / b;
+      },
+      {
+        name: 'divide',
+        description: 'Divide two numbers',
+        schema: z.object({
+          a: z.number().describe('first number'),
+          b: z.number().describe('second number'),
+        }),
+      },
+    );
+
+    // Augment the LLM with tools
+    const tools = [add, multiply, divide];
+    const toolsByName = Object.fromEntries(
+      tools.map((tool) => [tool.name, tool]),
+    );
+    const llmWithTools = this.llm.bindTools(tools);
+
+    // Nodes
+    const llmCall = async (state: typeof MessagesAnnotation.State) => {
+      // LLM decides wether to call a tool or not
+      const result = await llmWithTools.invoke([
+        {
+          role: 'system',
+          content:
+            'You are a helpful assistant tasked with performing arithmetic on a set of inputs.',
+        },
+        ...state.messages,
+      ]);
+
+      return {
+        messages: [result],
+      };
+    };
+
+    const toolNode = async (state: typeof MessagesAnnotation.State) => {
+      // Performs the tool call
+      const results: ToolMessage[] = [];
+      const lastMessage = state.messages.at(-1);
+
+      if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
+        for (const toolCall of lastMessage.tool_calls) {
+          const tool = toolsByName[toolCall.name];
+          const observation = await tool.invoke(toolCall.args);
+          results.push(
+            new ToolMessage({
+              content: observation,
+              tool_call_id: toolCall.id,
+            }),
+          );
+        }
+      }
+
+      return { messages: results };
+    };
+
+    // Conditional edge function to route the tool to the tool node or end
+    const shouldContinue = (state: typeof MessagesAnnotation.State) => {
+      const messages = state.messages;
+      const lastMessage = messages.at(-1);
+
+      // If the LLM makes a tool call, then perform an action
+      if (lastMessage instanceof AIMessage && lastMessage.tool_calls?.length) {
+        return 'Action';
+      }
+
+      // Otherwise, we stop (reply to user)
+      return '__end__';
+    };
+
+    // Build workflow
+    const agentBuilder = new StateGraph(MessagesAnnotation)
+      .addNode('llmCall', llmCall)
+      .addNode('tools', toolNode)
+      // Add edges to connect the nodes
+      .addEdge('__start__', 'llmCall')
+      .addConditionalEdges('llmCall', shouldContinue, {
+        // Name returned by shouldContinue: Name of next node to visit
+        Action: 'tools',
+        __end__: '__end__',
+      })
+      .addEdge('tools', 'llmCall')
+      .compile();
+
+    // Invoke
+    const messages = [
+      {
+        role: 'user',
+        content: 'Add 3 and 4.',
+      },
+    ];
+
+    const result = await agentBuilder.invoke({ messages });
+
+    return result.messages;
   }
 }
