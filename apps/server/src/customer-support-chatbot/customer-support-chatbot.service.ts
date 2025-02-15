@@ -41,7 +41,8 @@ export class CustomerSupportChatbotService {
       .addNode('billing_support', this.billingSupport)
       .addNode('technical_support', this.technicalSupport)
       .addNode('handle_refund', this.handleRefund)
-      .addEdge('__start__', 'initial_support');
+      .addEdge('__start__', 'initial_support')
+      .compile();
   }
 
   async initialSupport(state: typeof this.StateAnnotation.State) {
