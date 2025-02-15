@@ -1,164 +1,387 @@
-import { Suspense } from 'react';
-import Image from 'next/image';
+"use client"
+import {
+  Attachments,
+  Bubble,
+  Conversations,
+  Prompts,
+  Sender,
+  Welcome,
+  useXAgent,
+  useXChat,
+} from '@ant-design/x';
+import { createStyles } from 'antd-style';
+import React, { useEffect } from 'react';
 
-import { Link } from '@repo/api/links/entities/link.entity';
+import {
+  CloudUploadOutlined,
+  CommentOutlined,
+  EllipsisOutlined,
+  FireOutlined,
+  HeartOutlined,
+  PaperClipOutlined,
+  PlusOutlined,
+  ReadOutlined,
+  ShareAltOutlined,
+  SmileOutlined,
+} from '@ant-design/icons';
+import { Badge, Button, type GetProp, Space } from 'antd';
 
-import { Card } from '@repo/ui/card';
-import { Code } from '@repo/ui/code';
-import { Button } from '@repo/ui/button';
+const renderTitle = (icon: React.ReactElement, title: string) => (
+  <Space align="start">
+    {icon}
+    <span>{title}</span>
+  </Space>
+);
 
-import styles from './page.module.css';
+const defaultConversationsItems = [
+  {
+    key: '0',
+    label: 'What is Ant Design X?',
+  },
+];
 
-const Gradient = ({
-  conic,
-  className,
-  small,
-}: Readonly<{
-  small?: boolean;
-  conic?: boolean;
-  className?: string;
-}>) => {
-  return (
-    <span
-      className={[
-        styles.gradient,
-        conic ? styles.glowConic : undefined,
-        small ? styles.gradientSmall : styles.gradientLarge,
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
-    />
-  );
+const useStyle = createStyles(({ token, css }) => {
+  return {
+    layout: css`
+      width: 100%;
+      min-width: 1000px;
+      height: 722px;
+      border-radius: ${token.borderRadius}px;
+      display: flex;
+      background: ${token.colorBgContainer};
+      font-family: AlibabaPuHuiTi, ${token.fontFamily}, sans-serif;
+
+      .ant-prompts {
+        color: ${token.colorText};
+      }
+    `,
+    menu: css`
+      background: ${token.colorBgLayout}80;
+      width: 280px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    `,
+    conversations: css`
+      padding: 0 12px;
+      flex: 1;
+      overflow-y: auto;
+    `,
+    chat: css`
+      height: 100%;
+      width: 100%;
+      max-width: 700px;
+      margin: 0 auto;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      padding: ${token.paddingLG}px;
+      gap: 16px;
+    `,
+    messages: css`
+      flex: 1;
+    `,
+    placeholder: css`
+      padding-top: 32px;
+    `,
+    sender: css`
+      box-shadow: ${token.boxShadow};
+    `,
+    logo: css`
+      display: flex;
+      height: 72px;
+      align-items: center;
+      justify-content: start;
+      padding: 0 24px;
+      box-sizing: border-box;
+
+      img {
+        width: 24px;
+        height: 24px;
+        display: inline-block;
+      }
+
+      span {
+        display: inline-block;
+        margin: 0 8px;
+        font-weight: bold;
+        color: ${token.colorText};
+        font-size: 16px;
+      }
+    `,
+    addBtn: css`
+      background: #1677ff0f;
+      border: 1px solid #1677ff34;
+      width: calc(100% - 24px);
+      margin: 0 12px 24px 12px;
+    `,
+  };
+});
+
+const placeholderPromptsItems: GetProp<typeof Prompts, 'items'> = [
+  {
+    key: '1',
+    label: renderTitle(<FireOutlined style={{ color: '#FF4D4F' }} />, 'Hot Topics'),
+    description: 'What are you interested in?',
+    children: [
+      {
+        key: '1-1',
+        description: `What's new in X?`,
+      },
+      {
+        key: '1-2',
+        description: `What's AGI?`,
+      },
+      {
+        key: '1-3',
+        description: `Where is the doc?`,
+      },
+    ],
+  },
+  {
+    key: '2',
+    label: renderTitle(<ReadOutlined style={{ color: '#1890FF' }} />, 'Design Guide'),
+    description: 'How to design a good product?',
+    children: [
+      {
+        key: '2-1',
+        icon: <HeartOutlined />,
+        description: `Know the well`,
+      },
+      {
+        key: '2-2',
+        icon: <SmileOutlined />,
+        description: `Set the AI role`,
+      },
+      {
+        key: '2-3',
+        icon: <CommentOutlined />,
+        description: `Express the feeling`,
+      },
+    ],
+  },
+];
+
+const senderPromptsItems: GetProp<typeof Prompts, 'items'> = [
+  {
+    key: '1',
+    description: 'Hot Topics',
+    icon: <FireOutlined style={{ color: '#FF4D4F' }} />,
+  },
+  {
+    key: '2',
+    description: 'Design Guide',
+    icon: <ReadOutlined style={{ color: '#1890FF' }} />,
+  },
+];
+
+const roles: GetProp<typeof Bubble.List, 'roles'> = {
+  ai: {
+    placement: 'start',
+    typing: { step: 5, interval: 20 },
+    styles: {
+      content: {
+        borderRadius: 16,
+      },
+    },
+  },
+  local: {
+    placement: 'end',
+    variant: 'shadow',
+  },
 };
 
-const LinksSection = async () => {
-  const fetchLinks = async (): Promise<Link[]> => {
-    try {
-      return await (await fetch('http://localhost:3000/links')).json();
-    } catch (_) {
-      return [];
+const Independent: React.FC = () => {
+  // ==================== Style ====================
+  const { styles } = useStyle();
+
+  // ==================== State ====================
+  const [headerOpen, setHeaderOpen] = React.useState(false);
+
+  const [content, setContent] = React.useState('');
+
+  const [conversationsItems, setConversationsItems] = React.useState(defaultConversationsItems);
+
+  const [activeKey, setActiveKey] = React.useState(defaultConversationsItems[0]?.key);
+
+  const [attachedFiles, setAttachedFiles] = React.useState<GetProp<typeof Attachments, 'items'>>(
+    [],
+  );
+
+  // ==================== Runtime ====================
+  const [agent] = useXAgent({
+    request: async ({ message }, { onSuccess }) => {
+      onSuccess(`Mock success return. You said: ${message}`);
+    },
+  });
+
+  const { onRequest, messages, setMessages } = useXChat({
+    agent,
+  });
+
+  useEffect(() => {
+    if (activeKey !== undefined) {
+      setMessages([]);
     }
+  }, [activeKey]);
+
+  // ==================== Event ====================
+  const onSubmit = (nextContent: string) => {
+    if (!nextContent) return;
+    onRequest(nextContent);
+    setContent('');
   };
 
-  const links = await fetchLinks();
+  const onPromptsItemClick: GetProp<typeof Prompts, 'onItemClick'> = (info) => {
+    onRequest(info.data.description as string);
+  };
 
+  const onAddConversation = () => {
+    setConversationsItems([
+      ...conversationsItems,
+      {
+        key: `${conversationsItems.length}`,
+        label: `New Conversation ${conversationsItems.length}`,
+      },
+    ]);
+    setActiveKey(`${conversationsItems.length}`);
+  };
+
+  const onConversationClick: GetProp<typeof Conversations, 'onActiveChange'> = (key) => {
+    setActiveKey(key);
+  };
+
+  const handleFileChange: GetProp<typeof Attachments, 'onChange'> = (info) =>
+    setAttachedFiles(info.fileList);
+
+  // ==================== Nodes ====================
+  const placeholderNode = (
+    <Space direction="vertical" size={16} className={styles.placeholder}>
+      <Welcome
+        variant="borderless"
+        icon="https://mdn.alipayobjects.com/huamei_iwk9zp/afts/img/A*s5sNRo5LjfQAAAAAAAAAAAAADgCCAQ/fmt.webp"
+        title="Hello, I'm Ant Design X"
+        description="Base on Ant Design, AGI product interface solution, create a better intelligent vision~"
+        extra={
+          <Space>
+            <Button icon={<ShareAltOutlined />} />
+            <Button icon={<EllipsisOutlined />} />
+          </Space>
+        }
+      />
+      <Prompts
+        title="Do you want?"
+        items={placeholderPromptsItems}
+        styles={{
+          list: {
+            width: '100%',
+          },
+          item: {
+            flex: 1,
+          },
+        }}
+        onItemClick={onPromptsItemClick}
+      />
+    </Space>
+  );
+
+  const items: GetProp<typeof Bubble.List, 'items'> = messages.map(({ id, message, status }) => ({
+    key: id,
+    loading: status === 'loading',
+    role: status === 'local' ? 'local' : 'ai',
+    content: message,
+  }));
+
+  const attachmentsNode = (
+    <Badge dot={attachedFiles.length > 0 && !headerOpen}>
+      <Button type="text" icon={<PaperClipOutlined />} onClick={() => setHeaderOpen(!headerOpen)} />
+    </Badge>
+  );
+
+  const senderHeader = (
+    <Sender.Header
+      title="Attachments"
+      open={headerOpen}
+      onOpenChange={setHeaderOpen}
+      styles={{
+        content: {
+          padding: 0,
+        },
+      }}
+    >
+      <Attachments
+        beforeUpload={() => false}
+        items={attachedFiles}
+        onChange={handleFileChange}
+        placeholder={(type) =>
+          type === 'drop'
+            ? { title: 'Drop file here' }
+            : {
+                icon: <CloudUploadOutlined />,
+                title: 'Upload files',
+                description: 'Click or drag files to this area to upload',
+              }
+        }
+      />
+    </Sender.Header>
+  );
+
+  const logoNode = (
+    <div className={styles.logo}>
+      <img
+        src="https://mdn.alipayobjects.com/huamei_iwk9zp/afts/img/A*eco6RrQhxbMAAAAAAAAAAAAADgCCAQ/original"
+        draggable={false}
+        alt="logo"
+      />
+      <span>Ant Design X</span>
+    </div>
+  );
+
+  // ==================== Render =================
   return (
-    <div className={styles.grid}>
-      {links.map(({ title, url, description }) => (
-        <Card className={styles.card} href={url} key={title} title={title}>
-          {description}
-        </Card>
-      ))}
+    <div className={styles.layout}>
+      <div className={styles.menu}>
+        {/* 🌟 Logo */}
+        {logoNode}
+        {/* 🌟 添加会话 */}
+        <Button
+          onClick={onAddConversation}
+          type="link"
+          className={styles.addBtn}
+          icon={<PlusOutlined />}
+        >
+          New Conversation
+        </Button>
+        {/* 🌟 会话管理 */}
+        <Conversations
+          items={conversationsItems}
+          className={styles.conversations}
+          activeKey={activeKey}
+          onActiveChange={onConversationClick}
+        />
+      </div>
+      <div className={styles.chat}>
+        {/* 🌟 消息列表 */}
+        <Bubble.List
+          items={items.length > 0 ? items : [{ content: placeholderNode, variant: 'borderless' }]}
+          roles={roles}
+          className={styles.messages}
+        />
+        {/* 🌟 提示词 */}
+        <Prompts items={senderPromptsItems} onItemClick={onPromptsItemClick} />
+        {/* 🌟 输入框 */}
+        <Sender
+          value={content}
+          header={senderHeader}
+          onSubmit={onSubmit}
+          onChange={setContent}
+          prefix={attachmentsNode}
+          loading={agent.isRequesting()}
+          className={styles.sender}
+        />
+      </div>
     </div>
   );
 };
 
-const LinksSectionForTest = () => {
-  return (
-    <div className={styles.grid}>
-      <Card className={styles.card} href={'url'} title={'title'}>
-        description
-      </Card>
-    </div>
-  );
-};
-
-const RootPage = ({ params }: { params: { forTest?: boolean } }) => {
-  return (
-    <main className={styles.main}>
-      <div className={styles.description}>
-        <p>
-          examples/<Code className={styles.code}>with-nestjs</Code>
-        </p>
-        <div>
-          <a
-            href="https://vercel.com?utm_source=create-turbo&utm_medium=basic&utm_campaign=create-turbo"
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            By{' '}
-            <Image
-              alt="Vercel Logo"
-              className={styles.vercelLogo}
-              height={24}
-              priority
-              src="/vercel.svg"
-              width={100}
-            />
-          </a>
-        </div>
-      </div>
-
-      <Button appName="web (with-nestjs)" className={styles.button}>
-        Click me!
-      </Button>
-
-      <div className={styles.hero}>
-        <div className={styles.heroContent}>
-          <div className={styles.logos}>
-            <div className={styles.circles}>
-              <Image
-                alt=""
-                height={614}
-                src="circles.svg"
-                width={614}
-                style={{ pointerEvents: 'none' }}
-              />
-            </div>
-            <div className={styles.logoGradientContainer}>
-              <Gradient className={styles.logoGradient} conic small />
-            </div>
-
-            <div className={styles.logo}>
-              <Image
-                alt="Turborepo"
-                height={120}
-                priority
-                src="turborepo.svg"
-                width={120}
-                style={{ pointerEvents: 'none' }}
-              />
-            </div>
-          </div>
-
-          <Gradient className={styles.backgroundGradient} conic />
-
-          <div className={styles.turborepoWordmarkContainer}>
-            <svg
-              className={styles.turborepoWordmark}
-              viewBox="0 0 506 50"
-              width={200}
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <title>Turborepo logo</title>
-              <path d="M53.7187 12.0038V1.05332H0.945312V12.0038H20.8673V48.4175H33.7968V12.0038H53.7187Z" />
-              <path d="M83.5362 49.1431C99.764 49.1431 108.67 40.8972 108.67 27.3081V1.05332H95.7401V26.0547C95.7401 33.6409 91.7821 37.9287 83.5362 37.9287C75.2904 37.9287 71.3324 33.6409 71.3324 26.0547V1.05332H58.4029V27.3081C58.4029 40.8972 67.3084 49.1431 83.5362 49.1431Z" />
-              <path d="M128.462 32.7174H141.325L151.484 48.4175H166.327L154.848 31.3321C161.313 29.0232 165.271 23.8778 165.271 16.8853C165.271 6.72646 157.685 1.05332 146.141 1.05332H115.532V48.4175H128.462V32.7174ZM128.462 22.4925V11.8719H145.481C150.033 11.8719 152.54 13.8509 152.54 17.2152C152.54 20.3816 150.033 22.4925 145.481 22.4925H128.462Z" />
-              <path d="M171.287 48.4175H205.128C215.683 48.4175 221.752 43.404 221.752 35.0262C221.752 29.419 218.189 25.593 213.967 23.8778C216.87 22.4925 220.432 19.1942 220.432 13.9828C220.432 5.60502 214.495 1.05332 204.006 1.05332H171.287V48.4175ZM183.689 19.59V11.542H202.687C206.249 11.542 208.228 12.9273 208.228 15.566C208.228 18.2047 206.249 19.59 202.687 19.59H183.689ZM183.689 29.2871H203.875C207.371 29.2871 209.284 31.0022 209.284 33.5749C209.284 36.1476 207.371 37.8628 203.875 37.8628H183.689V29.2871Z" />
-              <path d="M253.364 0.261719C236.806 0.261719 224.866 10.6185 224.866 24.7354C224.866 38.8523 236.806 49.2091 253.364 49.2091C269.922 49.2091 281.796 38.8523 281.796 24.7354C281.796 10.6185 269.922 0.261719 253.364 0.261719ZM253.364 11.4761C262.072 11.4761 268.602 16.6215 268.602 24.7354C268.602 32.8493 262.072 37.9947 253.364 37.9947C244.656 37.9947 238.126 32.8493 238.126 24.7354C238.126 16.6215 244.656 11.4761 253.364 11.4761Z" />
-              <path d="M300.429 32.7174H313.292L323.451 48.4175H338.294L326.815 31.3321C333.28 29.0232 337.238 23.8778 337.238 16.8853C337.238 6.72646 329.652 1.05332 318.108 1.05332H287.499V48.4175H300.429V32.7174ZM300.429 22.4925V11.8719H317.448C322 11.8719 324.507 13.8509 324.507 17.2152C324.507 20.3816 322 22.4925 317.448 22.4925H300.429Z" />
-              <path d="M343.254 1.05332V48.4175H389.299V37.467H355.92V29.7489H385.539V19.0622H355.92V12.0038H389.299V1.05332H343.254Z" />
-              <path d="M408.46 33.3111H425.677C437.221 33.3111 444.807 27.7699 444.807 17.2152C444.807 6.59453 437.221 1.05332 425.677 1.05332H395.53V48.4175H408.46V33.3111ZM408.46 22.5585V11.8719H424.951C429.569 11.8719 432.076 13.8509 432.076 17.2152C432.076 20.5135 429.569 22.5585 424.951 22.5585H408.46Z" />
-              <path d="M476.899 0.261719C460.341 0.261719 448.401 10.6185 448.401 24.7354C448.401 38.8523 460.341 49.2091 476.899 49.2091C493.456 49.2091 505.33 38.8523 505.33 24.7354C505.33 10.6185 493.456 0.261719 476.899 0.261719ZM476.899 11.4761C485.606 11.4761 492.137 16.6215 492.137 24.7354C492.137 32.8493 485.606 37.9947 476.899 37.9947C468.191 37.9947 461.66 32.8493 461.66 24.7354C461.66 16.6215 468.191 11.4761 476.899 11.4761Z" />
-            </svg>
-          </div>
-        </div>
-      </div>
-
-      {/**
-       * @note Unsupported async component testing.
-       * Should limit the following constrain for a specific environment (dev or testing).
-       *
-       * @see https://nextjs.org/docs/app/building-your-application/testing/jest
-       */}
-      {params.forTest ? (
-        <LinksSectionForTest />
-      ) : (
-        <Suspense fallback={'Loading links...'}>{<LinksSection />}</Suspense>
-      )}
-    </main>
-  );
-};
-
-export default RootPage;
+export default Independent;
