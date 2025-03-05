@@ -3,26 +3,20 @@ import {
   SubscribeMessage,
   MessageBody,
   WebSocketServer,
-  OnGatewayInit,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
   ConnectedSocket,
+  OnGatewayConnection,
 } from '@nestjs/websockets';
 import { CustomerSupportChatbotService } from './customer-support-chatbot.service';
 import { HumanMessage } from '@langchain/core/messages';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { v4 as uuidv4 } from 'uuid';
 
 @WebSocketGateway({
-  cors: {
-    origin: '*',
-  },
+  cors: { origin: '*' },
   namespace: 'customer-support',
-  transports: ['websocket', 'polling'],
 })
-export class CustomerSupportChatbotGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
+export class CustomerSupportChatbotGateway implements OnGatewayConnection {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(CustomerSupportChatbotGateway.name);
 
@@ -30,81 +24,75 @@ export class CustomerSupportChatbotGateway
     private readonly customerSupportChatbotService: CustomerSupportChatbotService,
   ) {}
 
-  afterInit(server: Server) {
-    this.logger.log('WebSocket Gateway initialized');
-  }
-
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
-    client.emit('connected', { status: 'Connected to customer support chatbot' });
   }
 
-  handleDisconnect(client: Socket) {
-    this.logger.log(`Client disconnected: ${client.id}`);
-  }
-
-  @SubscribeMessage('customer-support-chatbot')
+  @SubscribeMessage('chat')
   async handleMessage(
-    @MessageBody() data: any,
+    @MessageBody() payload: any,
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.debug(`Message received from ${client.id}:`, data);
-    
-    // Handle both string messages and object messages
-    const message = typeof data === 'string' ? data : data?.message || data?.data;
+    this.logger.log(`Received raw payload:`, payload);
+
+    // Extract message from payload
+    const message = payload?.data?.message || payload?.message;
     
     if (!message) {
-      const errorResponse = {
-        error: 'No message provided',
-      };
-      this.logger.error('No message provided in request');
-      client.emit('error', errorResponse);
-      return errorResponse;
+      const errorMsg = 'No message provided in payload';
+      this.logger.error(errorMsg);
+      client.emit('error', { message: errorMsg });
+      return;
     }
+
+    this.logger.log(`Processing message from client ${client.id}: ${message}`);
 
     try {
-      this.logger.debug('Creating graph...');
+      this.logger.log('Creating graph...');
       const graph = await this.customerSupportChatbotService.graph();
+      this.logger.log('Graph created successfully');
       
-      this.logger.debug('Invoking graph with message:', message);
-      const result = await graph.invoke({
-        messages: [new HumanMessage(message)],
+      // Generate a unique thread ID for this conversation
+      const threadId = uuidv4();
+      this.logger.log(`Created thread ID: ${threadId}`);
+
+      this.logger.log('Initializing stream...');
+      const stream = await graph.stream({
+        messages: [
+          {
+            role: 'user',
+            content: message,
+          }
+        ],
         nextRepresentative: null,
         refundAuthorized: false,
+      }, {
+        configurable: {
+          thread_id: threadId,
+        }
       });
+      this.logger.log('Stream initialized successfully');
 
-      this.logger.debug('Got result from graph:', result);
+      let stepCount = 0;
+      // Stream each response to the client
+      for await (const step of stream) {
+        stepCount++;
+        this.logger.log(`Emitting step ${stepCount}:`, step);
+        client.emit('response', {
+          threadId,
+          step,
+          stepCount
+        });
+      }
+      this.logger.log(`Stream completed. Total steps: ${stepCount}`);
 
-      // Emit to the sender
-      client.emit('response', result.messages);
-      
-      // For debugging, also emit a simple message
-      client.emit('debug', { 
-        status: 'Message processed',
-        originalMessage: message,
-        hasResponse: !!result.messages 
-      });
-
-      return result.messages;
     } catch (error) {
-      this.logger.error('Error in customer support chatbot:', error instanceof Error ? error.stack : error);
-      const errorResponse = {
-        error: 'An error occurred while processing your message',
-        details: error instanceof Error ? error.message : String(error),
-      };
-      client.emit('error', errorResponse);
-      return errorResponse;
+      this.logger.error('Chat error:', error);
+      this.logger.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      client.emit('error', { 
+        message: 'Failed to process message',
+        details: error instanceof Error ? error.message : String(error)
+      });
     }
-  }
-
-  @SubscribeMessage('typing')
-  handleTyping(
-    @MessageBody() isTyping: boolean,
-    @ConnectedSocket() client: Socket,
-  ) {
-    this.logger.debug(`Client ${client.id} typing status: ${isTyping}`);
-    client.broadcast.emit(isTyping ? 'userTyping' : 'userStoppedTyping', {
-      clientId: client.id,
-    });
   }
 }

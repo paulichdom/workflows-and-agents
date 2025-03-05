@@ -36,7 +36,7 @@ export class CustomerSupportChatbotService {
     refundAuthorized: Annotation<boolean>,
   });
 
-  async graph() {
+  graph = async () => {
     const checkpointer = new MemorySaver();
 
     return new StateGraph(this.StateAnnotation)
@@ -79,9 +79,10 @@ export class CustomerSupportChatbotService {
       )
       .addEdge('handle_refund', '__end__')
       .compile({ checkpointer });
-  }
+  };
 
-  async initialSupport(state: typeof this.StateAnnotation.State) {
+  initialSupport = async (state: typeof this.StateAnnotation.State) => {
+    console.log('State received in initialSupport:', state);
     const supportResponse = await this.model.invoke([
       {
         role: 'system',
@@ -114,18 +115,16 @@ export class CustomerSupportChatbotService {
       },
     );
 
-    // Some chat models can return complex content, but Together will not
     const categorizationOutput = JSON.parse(
       categorizationResponse.content as string,
     );
-    // Will append the response message to the current interaction state
     return {
       messages: [supportResponse],
       nextRepresentative: categorizationOutput.nextRepresentative,
     };
-  }
+  };
 
-  async billingSupport(state: typeof this.StateAnnotation.State) {
+  billingSupport = async (state: typeof this.StateAnnotation.State) => {
     const trimmedHistory = this.trimMessageHistory(state.messages);
 
     const billingRepResponse = await this.model.invoke([
@@ -168,9 +167,9 @@ export class CustomerSupportChatbotService {
       messages: billingRepResponse,
       nextRepresentative: categorizationOutput.nextRepresentative,
     };
-  }
+  };
 
-  async technicalSupport(state: typeof this.StateAnnotation.State) {
+  technicalSupport = async (state: typeof this.StateAnnotation.State) => {
     const trimmedHistory = this.trimMessageHistory(state.messages);
 
     const response = await this.model.invoke([
@@ -184,9 +183,9 @@ export class CustomerSupportChatbotService {
     return {
       messages: response,
     };
-  }
+  };
 
-  async handleRefund(state: typeof this.StateAnnotation.State) {
+  handleRefund = async (state: typeof this.StateAnnotation.State) => {
     if (!state.refundAuthorized) {
       console.log('--- HUMAN AUTHORIZATION REQUIRED FOR REFUND ---');
       throw new NodeInterrupt('Human authorization required.');
@@ -197,12 +196,12 @@ export class CustomerSupportChatbotService {
         content: 'Refund processed!',
       },
     };
-  }
+  };
 
-  private trimMessageHistory(messages: BaseMessage[]): BaseMessage[] {
+  private trimMessageHistory = (messages: BaseMessage[]): BaseMessage[] => {
     if (messages.at(-1) && isAIMessage(messages.at(-1))) {
       return messages.slice(0, -1);
     }
     return messages;
-  }
+  };
 }
