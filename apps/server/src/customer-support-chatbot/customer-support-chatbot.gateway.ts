@@ -5,6 +5,8 @@ import {
   WebSocketServer,
   ConnectedSocket,
   OnGatewayConnection,
+  OnGatewayDisconnect,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { CustomerSupportChatbotService } from './customer-support-chatbot.service';
 import { HumanMessage } from '@langchain/core/messages';
@@ -15,8 +17,9 @@ import { v4 as uuidv4 } from 'uuid';
 @WebSocketGateway({
   cors: { origin: '*' },
   namespace: 'customer-support',
+  transports: ['websocket']
 })
-export class CustomerSupportChatbotGateway implements OnGatewayConnection {
+export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(CustomerSupportChatbotGateway.name);
 
@@ -24,8 +27,44 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection {
     private readonly customerSupportChatbotService: CustomerSupportChatbotService,
   ) {}
 
+  afterInit(server: Server) {
+    this.logger.log('WebSocket Gateway initialized');
+  }
+
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
+    client.emit('connected', { 
+      status: 'Connected to customer support chatbot',
+      clientId: client.id
+    });
+  }
+
+  handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+  }
+
+  private extractMessageContent(step: any): { content: string; representative: string } {
+    this.logger.debug('Extracting message content from step:', step);
+    
+    // Get the node name (e.g., 'initial_support', 'billing_support')
+    const nodeName = Object.keys(step)[0];
+    const nodeOutput = step[nodeName];
+
+    // Extract the message content
+    let content = '';
+    if (Array.isArray(nodeOutput.messages)) {
+      content = nodeOutput.messages[0]?.kwargs?.content || '';
+    } else {
+      content = nodeOutput.messages?.kwargs?.content || '';
+    }
+
+    const response = {
+      content,
+      representative: nodeName.replace('_', ' ').toUpperCase(),
+    };
+
+    this.logger.debug('Extracted response:', response);
+    return response;
   }
 
   @SubscribeMessage('chat')
@@ -33,7 +72,7 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection {
     @MessageBody() payload: any,
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.log(`Received raw payload:`, payload);
+    this.logger.log(`Received raw payload from ${client.id}:`, payload);
 
     // Extract message from payload
     const message = payload?.data?.message || payload?.message;
@@ -77,14 +116,25 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection {
       // Stream each response to the client
       for await (const step of stream) {
         stepCount++;
-        this.logger.log(`Emitting step ${stepCount}:`, step);
-        client.emit('response', {
+        this.logger.log(`Processing step ${stepCount}:`, step);
+        
+        const response = this.extractMessageContent(step);
+        const messageToSend = {
           threadId,
-          step,
-          stepCount
-        });
+          stepCount,
+          ...response
+        };
+        
+        this.logger.log(`Emitting response to client ${client.id}:`, messageToSend);
+        client.emit('response', messageToSend);
       }
       this.logger.log(`Stream completed. Total steps: ${stepCount}`);
+
+      // Send completion notification
+      client.emit('completed', { 
+        threadId, 
+        totalSteps: stepCount 
+      });
 
     } catch (error) {
       this.logger.error('Chat error:', error);

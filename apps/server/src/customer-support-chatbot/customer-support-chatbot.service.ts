@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ChatTogetherAI } from '@langchain/community/chat_models/togetherai';
 import { BaseMessage, isAIMessage } from '@langchain/core/messages';
 import {
@@ -19,9 +19,12 @@ const RepresentativeType = {
   RESPOND: 'RESPOND',
 } as const;
 
+type RepresentativeTypeKeys = keyof typeof RepresentativeType;
+
 @Injectable()
 export class CustomerSupportChatbotService {
   private readonly model: ChatTogetherAI;
+  private readonly logger = new Logger(CustomerSupportChatbotService.name);
 
   constructor() {
     this.model = new ChatTogetherAI({
@@ -32,11 +35,11 @@ export class CustomerSupportChatbotService {
 
   private StateAnnotation = Annotation.Root({
     ...MessagesAnnotation.spec,
-    nextRepresentative: Annotation<keyof typeof RepresentativeType>,
+    nextRepresentative: Annotation<RepresentativeTypeKeys>,
     refundAuthorized: Annotation<boolean>,
   });
 
-  graph = async () => {
+  async graph() {
     const checkpointer = new MemorySaver();
 
     return new StateGraph(this.StateAnnotation)
@@ -47,13 +50,16 @@ export class CustomerSupportChatbotService {
       .addEdge('__start__', 'initial_support')
       .addConditionalEdges(
         'initial_support',
-        async (state: typeof this.StateAnnotation.State) => {
-          if (state.nextRepresentative.includes('BILLING')) {
-            return 'billing';
-          } else if (state.nextRepresentative.includes('TECHNICAL')) {
-            return 'technical';
-          } else {
-            return 'conversational';
+        async (state) => {
+          this.logger.log('Routing state:', state);
+          
+          switch (state.nextRepresentative) {
+            case 'BILLING':
+              return 'billing';
+            case 'TECHNICAL':
+              return 'technical';
+            default:
+              return 'conversational';
           }
         },
         {
@@ -66,11 +72,7 @@ export class CustomerSupportChatbotService {
       .addConditionalEdges(
         'billing_support',
         async (state) => {
-          if (state.nextRepresentative.includes('REFUND')) {
-            return 'refund';
-          } else {
-            return '__end__';
-          }
+          return state.nextRepresentative === 'REFUND' ? 'refund' : 'end';
         },
         {
           refund: 'handle_refund',
