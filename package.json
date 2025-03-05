@@ -43,6 +43,7 @@
     "ai": "^4.1.34",
     "antd": "^5.24.0",
     "antd-style": "^3.7.1",
+    "styled-components": "^6.1.15",
     "zod": "^3.24.2",
     "zod-to-json-schema": "^3.24.1"
   }

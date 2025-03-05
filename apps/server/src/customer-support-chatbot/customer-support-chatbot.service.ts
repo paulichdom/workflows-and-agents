@@ -3,6 +3,7 @@ import { ChatTogetherAI } from '@langchain/community/chat_models/togetherai';
 import { BaseMessage, isAIMessage } from '@langchain/core/messages';
 import {
   Annotation,
+  MemorySaver,
   MessagesAnnotation,
   NodeInterrupt,
   StateGraph,
@@ -36,13 +37,48 @@ export class CustomerSupportChatbotService {
   });
 
   async graph() {
+    const checkpointer = new MemorySaver();
+
     return new StateGraph(this.StateAnnotation)
       .addNode('initial_support', this.initialSupport)
       .addNode('billing_support', this.billingSupport)
       .addNode('technical_support', this.technicalSupport)
       .addNode('handle_refund', this.handleRefund)
       .addEdge('__start__', 'initial_support')
-      .compile();
+      .addConditionalEdges(
+        'initial_support',
+        async (state: typeof this.StateAnnotation.State) => {
+          if (state.nextRepresentative.includes('BILLING')) {
+            return 'billing';
+          } else if (state.nextRepresentative.includes('TECHNICAL')) {
+            return 'technical';
+          } else {
+            return 'conversational';
+          }
+        },
+        {
+          billing: 'billing_support',
+          technical: 'technical_support',
+          conversational: '__end__',
+        },
+      )
+      .addEdge('technical_support', '__end__')
+      .addConditionalEdges(
+        'billing_support',
+        async (state) => {
+          if (state.nextRepresentative.includes('REFUND')) {
+            return 'refund';
+          } else {
+            return '__end__';
+          }
+        },
+        {
+          refund: 'handle_refund',
+          end: '__end__',
+        },
+      )
+      .addEdge('handle_refund', '__end__')
+      .compile({ checkpointer });
   }
 
   async initialSupport(state: typeof this.StateAnnotation.State) {
@@ -169,5 +205,4 @@ export class CustomerSupportChatbotService {
     }
     return messages;
   }
-
 }
