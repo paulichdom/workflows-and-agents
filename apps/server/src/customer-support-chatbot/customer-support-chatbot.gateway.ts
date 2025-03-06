@@ -16,8 +16,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: 'customer-support',
-  transports: ['websocket']
+  namespace: '/customer-support',
+  transports: ['websocket', 'polling']
 })
 export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
   @WebSocketServer() server: Server;
@@ -33,9 +33,10 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
 
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
-    client.emit('connected', { 
-      status: 'Connected to customer support chatbot',
-      clientId: client.id
+    // Send a message back to confirm connection
+    this.server.emit('message', { 
+      type: 'connection',
+      content: `Connected to customer support chatbot. Client ID: ${client.id}`
     });
   }
 
@@ -53,9 +54,15 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
     // Extract the message content
     let content = '';
     if (Array.isArray(nodeOutput.messages)) {
-      content = nodeOutput.messages[0]?.kwargs?.content || '';
-    } else {
-      content = nodeOutput.messages?.kwargs?.content || '';
+      // Handle array of messages
+      const message = nodeOutput.messages[0];
+      content = message?.kwargs?.content || message?.content || '';
+    } else if (nodeOutput.messages?.kwargs?.content) {
+      // Handle single message with kwargs
+      content = nodeOutput.messages.kwargs.content;
+    } else if (nodeOutput.messages?.content) {
+      // Handle single message without kwargs
+      content = nodeOutput.messages.content;
     }
 
     const response = {
@@ -67,20 +74,33 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
     return response;
   }
 
-  @SubscribeMessage('chat')
+  @SubscribeMessage('message')
   async handleMessage(
     @MessageBody() payload: any,
     @ConnectedSocket() client: Socket,
   ) {
     this.logger.log(`Received raw payload from ${client.id}:`, payload);
 
-    // Extract message from payload
-    const message = payload?.data?.message || payload?.message;
-    
-    if (!message) {
-      const errorMsg = 'No message provided in payload';
+    // Extract message from payload, handling different formats
+    let message = '';
+    try {
+      if (typeof payload === 'string') {
+        const parsed = JSON.parse(payload);
+        message = parsed?.data?.message || parsed?.message || parsed;
+      } else {
+        message = payload?.data?.message || payload?.message || payload;
+      }
+    } catch (e) {
+      message = payload;
+    }
+
+    if (!message || typeof message !== 'string') {
+      const errorMsg = 'Invalid or no message provided';
       this.logger.error(errorMsg);
-      client.emit('error', { message: errorMsg });
+      this.server.emit('message', { 
+        type: 'error',
+        content: errorMsg 
+      });
       return;
     }
 
@@ -91,7 +111,6 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
       const graph = await this.customerSupportChatbotService.graph();
       this.logger.log('Graph created successfully');
       
-      // Generate a unique thread ID for this conversation
       const threadId = uuidv4();
       this.logger.log(`Created thread ID: ${threadId}`);
 
@@ -120,18 +139,20 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
         
         const response = this.extractMessageContent(step);
         const messageToSend = {
+          type: 'response',
           threadId,
           stepCount,
           ...response
         };
         
         this.logger.log(`Emitting response to client ${client.id}:`, messageToSend);
-        client.emit('response', messageToSend);
+        this.server.emit('message', messageToSend);
       }
       this.logger.log(`Stream completed. Total steps: ${stepCount}`);
 
       // Send completion notification
-      client.emit('completed', { 
+      this.server.emit('message', { 
+        type: 'completed',
         threadId, 
         totalSteps: stepCount 
       });
@@ -139,8 +160,9 @@ export class CustomerSupportChatbotGateway implements OnGatewayConnection, OnGat
     } catch (error) {
       this.logger.error('Chat error:', error);
       this.logger.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-      client.emit('error', { 
-        message: 'Failed to process message',
+      this.server.emit('message', { 
+        type: 'error',
+        content: 'Failed to process message',
         details: error instanceof Error ? error.message : String(error)
       });
     }
